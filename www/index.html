@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content">
 <title>단색 배경 앱</title>
 <style>
   :root {
@@ -351,10 +351,12 @@
 
   // ───────── 카메라 (화면 이동 / 확대 축소) ─────────
   var cam = { x: 0, y: 0, k: 1 };
+  // 키보드가 올라올 때 브라우저가 화면(보이는 영역)을 위로 밀어 올리면, 그만큼 도형 전체를 같이 올려서 도형과 선이 사라지거나 깜빡이지 않게 한다
+  var vvOff = { x: 0, y: 0 };
 
   function applyCam() {
     worldEl.style.transform =
-      'translate(' + cam.x + 'px,' + cam.y + 'px) scale(' + cam.k + ')';
+      'translate(' + (cam.x + vvOff.x) + 'px,' + (cam.y + vvOff.y) + 'px) scale(' + cam.k + ')';
     // 선과 장방형 테두리는 같은 두께(1.5)를 쓰고, 화면을 확대·축소하면 도형과 함께 두께도 커지고 작아진다
     document.documentElement.style.setProperty('--lw', LINE_W + 'px');
     markDirty();
@@ -469,7 +471,30 @@
   }
 
   // 입력 중인 장방형만 키보드에 가리지 않는 위치로 잠시 올려 둔다 (원래 위치는 _home에 보관)
+  function syncVV() {
+    var vv = window.visualViewport;
+    var editing = !!nodesEl.querySelector('.node.editing');
+    var nx = (editing && vv) ? vv.offsetLeft : 0;
+    var ny = (editing && vv) ? vv.offsetTop : 0;
+    if (nx !== vvOff.x || ny !== vvOff.y) {
+      vvOff.x = nx;
+      vvOff.y = ny;
+      applyCam();
+    }
+  }
+
+  var kevRaf = 0;
   function keepEditingVisible() {
+    // 키보드 애니메이션 중에는 이벤트가 연달아 오므로, 화면 한 프레임에 한 번만 처리한다
+    if (kevRaf) return;
+    kevRaf = requestAnimationFrame(function () {
+      kevRaf = 0;
+      applyKeepEditingVisible();
+    });
+  }
+
+  function applyKeepEditingVisible() {
+    syncVV();
     var el = nodesEl.querySelector('.node.editing');
     if (!el || !el._home) return;
     var vv = window.visualViewport;
@@ -478,11 +503,13 @@
     var vw = vv ? vv.width : window.innerWidth;
     var k = cam.k;
     var w = el.offsetWidth * k, h = el.offsetHeight * k;
-    var sl = cam.x + el._home.l * k, st = cam.y + el._home.t * k;
+    var sl = cam.x + vvOff.x + el._home.l * k, st = cam.y + vvOff.y + el._home.t * k;
     var l = Math.max(vLeft + 8, Math.min(sl, vLeft + vw - w - 8));
     var t = Math.max(vTop + 8, Math.min(st, vTop + vh - h - 8));
-    el.style.left = Math.round((l - cam.x) / k) + 'px';
-    el.style.top = Math.round((t - cam.y) / k) + 'px';
+    var nl = Math.round((l - cam.x - vvOff.x) / k) + 'px';
+    var nt = Math.round((t - cam.y - vvOff.y) / k) + 'px';
+    if (el.style.left !== nl) el.style.left = nl;
+    if (el.style.top !== nt) el.style.top = nt;
     updateLines();
   }
 
@@ -536,14 +563,15 @@
     setHome(el);
     el.classList.add('editing');
     setEditable(t, true);
-    t.focus();
+    // preventScroll: 포커스를 줄 때 브라우저가 화면을 멋대로 밀어 올리지 않게 한다
+    t.focus({ preventScroll: true });
     var range = document.createRange();
     range.selectNodeContents(t);
     range.collapse(false);
     var sel = window.getSelection();
     sel.removeAllRanges();
     sel.addRange(range);
-    keepEditingVisible();
+    applyKeepEditingVisible();
   }
 
   function stopEditing(el) {
@@ -552,6 +580,7 @@
     var sel = window.getSelection();
     if (sel) sel.removeAllRanges();
     restoreHome(el);
+    syncVV();
     window.scrollTo(0, 0);
   }
 
@@ -914,7 +943,7 @@
     titleBefore = row.textContent;
     row.classList.add('editing');
     setEditable(row, true);
-    row.focus();
+    row.focus({ preventScroll: true });
     setCaretEnd(row);
   }
 
@@ -1287,8 +1316,8 @@
   });
   placeDock();
   if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', function () { keepEditingVisible(); placeDock(); });
-    window.visualViewport.addEventListener('scroll', function () { keepEditingVisible(); placeDock(); });
+    window.visualViewport.addEventListener('resize', function () { syncVV(); keepEditingVisible(); placeDock(); });
+    window.visualViewport.addEventListener('scroll', function () { syncVV(); keepEditingVisible(); placeDock(); });
   }
 
   window.addEventListener('pagehide', persist);
