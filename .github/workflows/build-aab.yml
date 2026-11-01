@@ -29,9 +29,6 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: 안드로이드 SDK 준비
-        uses: android-actions/setup-android@v3
-
       - name: 업로드 키 복원
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
