@@ -353,10 +353,12 @@
   var cam = { x: 0, y: 0, k: 1 };
   // 키보드가 올라올 때 브라우저가 화면(보이는 영역)을 위로 밀어 올리면, 그만큼 도형 전체를 같이 올려서 도형과 선이 사라지거나 깜빡이지 않게 한다
   var vvOff = { x: 0, y: 0 };
+  // 입력 중인 도형이 키보드에 가리지 않도록 화면 전체를 통째로 올리는 값 (도형을 하나씩 따로 움직이지 않아서 깜빡임이 없다)
+  var editShift = { x: 0, y: 0 };
 
   function applyCam() {
     worldEl.style.transform =
-      'translate(' + (cam.x + vvOff.x) + 'px,' + (cam.y + vvOff.y) + 'px) scale(' + cam.k + ')';
+      'translate(' + (cam.x + vvOff.x + editShift.x) + 'px,' + (cam.y + vvOff.y + editShift.y) + 'px) scale(' + cam.k + ')';
     // 선과 장방형 테두리는 같은 두께(1.5)를 쓰고, 화면을 확대·축소하면 도형과 함께 두께도 커지고 작아진다
     document.documentElement.style.setProperty('--lw', LINE_W + 'px');
     markDirty();
@@ -496,21 +498,26 @@
   function applyKeepEditingVisible() {
     syncVV();
     var el = nodesEl.querySelector('.node.editing');
-    if (!el || !el._home) return;
-    var vv = window.visualViewport;
-    var vTop = vv ? vv.offsetTop : 0, vLeft = vv ? vv.offsetLeft : 0;
-    var vh = vv ? vv.height : window.innerHeight;
-    var vw = vv ? vv.width : window.innerWidth;
-    var k = cam.k;
-    var w = el.offsetWidth * k, h = el.offsetHeight * k;
-    var sl = cam.x + vvOff.x + el._home.l * k, st = cam.y + vvOff.y + el._home.t * k;
-    var l = Math.max(vLeft + 8, Math.min(sl, vLeft + vw - w - 8));
-    var t = Math.max(vTop + 8, Math.min(st, vTop + vh - h - 8));
-    var nl = Math.round((l - cam.x - vvOff.x) / k) + 'px';
-    var nt = Math.round((t - cam.y - vvOff.y) / k) + 'px';
-    if (el.style.left !== nl) el.style.left = nl;
-    if (el.style.top !== nt) el.style.top = nt;
-    updateLines();
+    var sx = 0, sy = 0;
+    if (el && el._home) {
+      var vv = window.visualViewport;
+      var vTop = vv ? vv.offsetTop : 0, vLeft = vv ? vv.offsetLeft : 0;
+      var vh = vv ? vv.height : window.innerHeight;
+      var vw = vv ? vv.width : window.innerWidth;
+      var k = cam.k;
+      var w = el.offsetWidth * k, h = el.offsetHeight * k;
+      // 도형은 제자리에 둔 채, 화면(월드)을 얼마나 올려야 키보드 위에 보이는지만 계산
+      var cl = cam.x + vvOff.x + el._home.l * k, ct = cam.y + vvOff.y + el._home.t * k;
+      var l = Math.max(vLeft + 8, Math.min(cl, vLeft + vw - w - 8));
+      var t = Math.max(vTop + 8, Math.min(ct, vTop + vh - h - 8));
+      sx = Math.round(l - cl);
+      sy = Math.round(t - ct);
+    }
+    if (sx !== editShift.x || sy !== editShift.y) {
+      editShift.x = sx;
+      editShift.y = sy;
+      applyCam();
+    }
   }
 
   // 입력이 끝나면 원래 위치로 돌려놓는다
@@ -580,7 +587,10 @@
     var sel = window.getSelection();
     if (sel) sel.removeAllRanges();
     restoreHome(el);
+    editShift.x = 0;
+    editShift.y = 0;
     syncVV();
+    applyCam();
     window.scrollTo(0, 0);
   }
 
@@ -612,6 +622,8 @@
   function createNodeAt(left, top, text, silent, id) {
     var el = document.createElement('div');
     el.className = 'node';
+    // 생성 애니메이션이 끝나면 애니메이션 상태를 완전히 걷어내서, 이후 화면 갱신 때 도형이 깜빡이지 않게 한다
+    el.addEventListener('animationend', function () { el.style.animation = 'none'; });
     el._id = id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
     if (silent) el.style.animation = 'none';
     var t = document.createElement('div');
