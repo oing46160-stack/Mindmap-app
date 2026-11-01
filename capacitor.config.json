@@ -1,0 +1,8 @@
+{
+  "appId": "com.ssyari.mindmap",
+  "appName": "마인드맵",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#ffffff"
+  }
+}

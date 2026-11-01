@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>단색 배경 앱</title>
+<style>
+  :root {
+    --ink: #000000;
+    --paper: #ffffff;
+    --paper-rgb: 255, 255, 255;
+    --node-dy: 0.5px;
+    --node-font: "Noto Sans KR", -apple-system, "Apple SD Gothic Neo", sans-serif;
+    --node-size: 14px;
+  }
+  /* 다크모드: 잉크색과 종이색을 서로 바꾼다 */
+  body.dark {
+    --ink: #ffffff;
+    --paper: #000000;
+    --paper-rgb: 0, 0, 0;
+  }
+  /* 장방형 색: 기본은 속이 잉크색, 글자는 종이색. 테두리 모드는 검은 테두리에 속이 흰색 */
+  body {
+    --node-bg: var(--ink);
+    --node-fg: var(--paper);
+  }
+  body.outline {
+    --node-bg: var(--paper);
+    --node-fg: var(--ink);
+  }
+  * {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    touch-action: none;
+  }
+  body {
+    background: var(--paper);
+    transition: background-color 0.3s ease;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  }
+
+  /* 무한 캔버스: 화면 이동/확대 축소는 이 요소의 transform으로 처리 */
+  #world {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    z-index: 1;
+    transform-origin: 0 0;
+    pointer-events: none;
+  }
+  #lines {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1px;
+    height: 1px;
+    overflow: visible;
+    pointer-events: none;
+  }
+  #lines line {
+    stroke: var(--ink);
+    transition: stroke 0.3s ease;
+    /* 장방형 테두리(--lw)와 같은 두께. 확대·축소하면 도형과 함께 변한다 */
+    stroke-width: var(--lw, 1.5px);
+    stroke-linecap: round;
+  }
+  #nodes {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+  }
+  .node {
+    position: absolute;
+    box-sizing: border-box;
+    width: max-content;
+    min-width: 56px;
+    min-height: 32px;
+    max-width: 70vw;
+    padding: 6px 15px;
+    border: 0;
+    border-radius: 16px;
+    background: var(--node-bg);
+    color: var(--node-fg);
+    font-family: var(--node-font);
+    font-size: var(--node-size);
+    line-height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+    pointer-events: auto;
+    touch-action: none;
+    cursor: grab;
+    animation: grow 0.2s ease-out;
+  }
+  /* 그룹으로 선택된 장방형: 투명하게 하지 않고, 불투명한 회색 톤으로만 표시 */
+  .node.grouped {
+    background: color-mix(in srgb, var(--ink) 45%, var(--paper));
+  }
+  body.outline .node.grouped {
+    background: color-mix(in srgb, var(--ink) 18%, var(--paper));
+  }
+  @supports not (background: color-mix(in srgb, red 50%, blue)) {
+    .node.grouped { background: #808080; }
+  }
+  /* 테두리 모드: 테두리 두께를 연결선과 똑같이 맞춘다.
+     border는 화면 픽셀 단위로 반올림되어 선과 달라지므로, 소수점 두께가 정확히 그려지는 inset 그림자로 그린다 */
+  body.outline .node {
+    box-shadow: inset 0 0 0 var(--lw, 1.5px) var(--ink);
+  }
+  .node.dragging {
+    cursor: grabbing;
+  }
+  .node .t {
+    display: block;
+    max-width: 100%;
+    min-width: 4px;
+    min-height: 20px;
+    text-align: center;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    outline: none;
+    caret-color: var(--node-fg);
+    position: relative;
+    top: var(--node-dy);
+  }
+  .node.editing {
+    cursor: text;
+  }
+  .node.editing .t {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  @keyframes grow {
+    from { opacity: 0; transform: scale(0.3); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  #bin {
+    position: fixed;
+    left: 50%;
+    bottom: 32px;
+    z-index: 2;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--ink);
+    color: var(--paper);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, 90px);
+    transition: transform 0.22s ease-out, opacity 0.22s ease-out;
+  }
+  #bin.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  #bin svg {
+    width: 14px;
+    height: 14px;
+  }
+  #dock {
+    position: fixed;
+    left: 0;
+    top: calc(100% - 64px);
+    width: 64px;
+    height: 64px;
+    z-index: 3;
+    touch-action: none;
+  }
+  /* 원/사각 버튼: 항상 보이는 하단 우측 */
+  #tools {
+    position: fixed;
+    right: 24px;
+    top: calc(100% - 64px);
+  }
+
+  /* 메뉴를 열면 왼쪽에서 하얀 그라데이션 창이 나타난다 (마인드맵 목록) */
+  #panel {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: min(80vw, 320px);
+    z-index: 2;
+    box-sizing: border-box;
+    padding: 24px 24px 0;
+    background: linear-gradient(90deg,
+      rgba(var(--paper-rgb), 0.96) 0%,
+      rgba(var(--paper-rgb), 0.88) 50%,
+      rgba(var(--paper-rgb), 0) 100%);
+    pointer-events: none;
+    transform: translateX(-100%);
+    opacity: 0;
+    visibility: hidden;
+    transition: transform 0.25s ease, opacity 0.2s ease, visibility 0s linear 0.25s;
+  }
+  #dock.open ~ #panel {
+    transform: translateX(0);
+    opacity: 1;
+    visibility: visible;
+    transition: transform 0.25s ease, opacity 0.2s ease, visibility 0s;
+  }
+  #maplist {
+    display: flex;
+    flex-direction: column;
+    width: fit-content;
+    max-width: 100%;
+    max-height: 60vh;
+    overflow-y: auto;
+    pointer-events: auto;
+    /* 스크롤 영역은 윗 요소의 touch-action을 물려받지 못해서, 직접 none으로 지정 (안 하면 손가락으로 끄는 순간 터치가 취소됨) */
+    touch-action: none;
+  }
+  #maplist .mrow {
+    touch-action: none;
+    flex: none;
+    box-sizing: border-box;
+    max-width: 100%;
+    padding: 7px 2px;
+    color: var(--ink);
+    opacity: 0.7;
+    font-size: 14px;
+    line-height: 18px;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    outline: none;
+    cursor: pointer;
+    position: relative;
+    transition: font-size 0.22s ease, line-height 0.22s ease, opacity 0.22s ease;
+  }
+  /* 선택된 마인드맵: 순서는 그대로, 제목만 살짝 크고 굵게 */
+  #maplist .mrow.cur {
+    opacity: 1;
+    font-size: 16px;
+    line-height: 22px;
+    font-weight: 700;
+    cursor: text;
+  }
+  #maplist .mrow.editing {
+    -webkit-user-select: text;
+    user-select: text;
+    text-overflow: clip;
+    caret-color: var(--ink);
+  }
+  #maplist .mrow.shift {
+    transition: transform 0.15s ease;
+  }
+  #maplist .mrow.lift {
+    z-index: 2;
+    transition: none;
+  }
+  .dbtn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+  }
+  /* 하단 좌측 모서리: 보이지 않는 터치 영역 (짧게 누르면 메뉴, 길게 누르면 새 마인드맵) */
+  #menuBtn {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 64px;
+    height: 64px;
+  }
+  #shapeBtn .icon {
+    display: block;
+    width: 14px;
+    height: 14px;
+    box-sizing: border-box;
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    background: var(--ink);
+    transition: border-radius 0.2s ease, border-color 0.3s ease, background-color 0.3s ease;
+  }
+  /* 테두리만 뜨는 테마에서는 버튼 속도 비운다 */
+  body.outline #shapeBtn .icon {
+    background: transparent;
+  }
+  body.rect #shapeBtn .icon {
+    border-radius: 0;
+  }
+  .node {
+    transition: border-radius 0.2s ease, background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, opacity 0.15s ease;
+  }
+  body.rect .node {
+    border-radius: 0;
+  }
+</style>
+</head>
+<body>
+  <div id="world">
+    <svg id="lines" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="nodes"></div>
+  </div>
+  <div id="bin" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+      <path d="M6 6l12 12M18 6L6 18"/>
+    </svg>
+  </div>
+  <div id="dock">
+    <button class="dbtn" id="menuBtn" aria-label="메뉴">
+    </button>
+    <div id="tools">
+      <button class="dbtn" id="shapeBtn" aria-label="도형 모양 바꾸기"><span class="icon"></span></button>
+    </div>
+  </div>
+  <div id="panel">
+    <div id="maplist"></div>
+  </div>
+
+<script>
+(function () {
+  var LONG_PRESS_MS = 450;
+  var MOVE_TOLERANCE = 10;
+  var MIN_ZOOM = 0.1, MAX_ZOOM = 4;
+  var LINE_ANIM_MS = 220;
+  var LINE_W = 1.5; // 연결선과 테두리 두께 (확대·축소에 따라 같이 변함)
+
+  var worldEl = document.getElementById('world');
+  var nodesEl = document.getElementById('nodes');
+  var linesEl = document.getElementById('lines');
+  var bin = document.getElementById('bin');
+  var SVGNS = 'http://www.w3.org/2000/svg';
+
+  // ───────── 카메라 (화면 이동 / 확대 축소) ─────────
+  var cam = { x: 0, y: 0, k: 1 };
+
+  function applyCam() {
+    worldEl.style.transform =
+      'translate(' + cam.x + 'px,' + cam.y + 'px) scale(' + cam.k + ')';
+    // 선과 장방형 테두리는 같은 두께(1.5)를 쓰고, 화면을 확대·축소하면 도형과 함께 두께도 커지고 작아진다
+    document.documentElement.style.setProperty('--lw', LINE_W + 'px');
+    markDirty();
+  }
+
+  function toWorld(sx, sy) {
+    return { x: (sx - cam.x) / cam.k, y: (sy - cam.y) / cam.k };
+  }
+
+  function zoomAt(mx, my, k) {
+    k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
+    var wx = (mx - cam.x) / cam.k, wy = (my - cam.y) / cam.k;
+    cam.k = k;
+    cam.x = mx - wx * k;
+    cam.y = my - wy * k;
+    applyCam();
+  }
+
+  // ───────── 선 ─────────
+  // link: { a, b, line, from, p, removing }
+  //  from: 선이 그려지기 시작하는(고정된) 쪽 장방형, p: 0~1 진행도
+  var links = [];
+
+  function center(el) {
+    return { x: el.offsetLeft + el.offsetWidth / 2, y: el.offsetTop + el.offsetHeight / 2 };
+  }
+
+  function updateLines() {
+    links.forEach(function (l) {
+      var other = l.from === l.a ? l.b : l.a;
+      var P = center(l.from), Q = center(other);
+      l.line.setAttribute('x1', P.x);
+      l.line.setAttribute('y1', P.y);
+      l.line.setAttribute('x2', P.x + (Q.x - P.x) * l.p);
+      l.line.setAttribute('y2', P.y + (Q.y - P.y) * l.p);
+    });
+  }
+
+  function animateLink(l, from, to, done) {
+    var start = performance.now();
+    l.token = (l.token || 0) + 1;
+    var token = l.token;
+    function step(now) {
+      if (l.token !== token) return;
+      var t = Math.min(1, (now - start) / LINE_ANIM_MS);
+      l.p = from + (to - from) * (t * (2 - t));
+      updateLines();
+      if (t < 1) requestAnimationFrame(step);
+      else if (done) done();
+    }
+    requestAnimationFrame(step);
+  }
+
+  function dropLink(l) {
+    var i = links.indexOf(l);
+    if (i >= 0) links.splice(i, 1);
+    if (l.line.parentNode) l.line.parentNode.removeChild(l.line);
+  }
+
+  // 선을 fromEl 쪽으로 줄어들며 지운다
+  function retractLink(l, anchor) {
+    if (l.removing) return;
+    l.removing = true;
+    l.from = anchor;
+    animateLink(l, l.p, 0, function () { dropLink(l); });
+  }
+
+  function findLink(a, b) {
+    for (var i = 0; i < links.length; i++) {
+      var l = links[i];
+      if (!l.removing && ((l.a === a && l.b === b) || (l.a === b && l.b === a))) return l;
+    }
+    return null;
+  }
+
+  // 같은 쌍을 다시 드래그하면 선이 지워지고, 없으면 새로 생긴다
+  function toggleLink(a, b) {
+    if (a === b) return;
+    var existing = findLink(a, b);
+    if (existing) {
+      // 처음 누른 장방형(a)에서 드래그해 도착한 장방형(b) 쪽으로 줄어들며 사라진다
+      retractLink(existing, b);
+      markDirty();
+      return;
+    }
+    makeLink(a, b, true);
+    markDirty();
+  }
+
+  function makeLink(a, b, animate) {
+    var line = document.createElementNS(SVGNS, 'line');
+    linesEl.appendChild(line);
+    var l = { a: a, b: b, line: line, from: a, p: animate ? 0 : 1, removing: false };
+    links.push(l);
+    updateLines();
+    if (animate) animateLink(l, 0, 1);
+    return l;
+  }
+
+  function retractLinksOf(el) {
+    links.slice().forEach(function (l) {
+      if (l.a === el || l.b === el) retractLink(l, l.a === el ? l.b : l.a);
+    });
+  }
+
+  // ───────── 장방형 ─────────
+  var resizeObserver = typeof ResizeObserver !== 'undefined'
+    ? new ResizeObserver(function () { keepEditingVisible(); updateLines(); }) : null;
+
+  function setHome(el) {
+    el._home = { l: el.offsetLeft, t: el.offsetTop };
+  }
+
+  // 입력 중인 장방형만 키보드에 가리지 않는 위치로 잠시 올려 둔다 (원래 위치는 _home에 보관)
+  function keepEditingVisible() {
+    var el = nodesEl.querySelector('.node.editing');
+    if (!el || !el._home) return;
+    var vv = window.visualViewport;
+    var vTop = vv ? vv.offsetTop : 0, vLeft = vv ? vv.offsetLeft : 0;
+    var vh = vv ? vv.height : window.innerHeight;
+    var vw = vv ? vv.width : window.innerWidth;
+    var k = cam.k;
+    var w = el.offsetWidth * k, h = el.offsetHeight * k;
+    var sl = cam.x + el._home.l * k, st = cam.y + el._home.t * k;
+    var l = Math.max(vLeft + 8, Math.min(sl, vLeft + vw - w - 8));
+    var t = Math.max(vTop + 8, Math.min(st, vTop + vh - h - 8));
+    el.style.left = Math.round((l - cam.x) / k) + 'px';
+    el.style.top = Math.round((t - cam.y) / k) + 'px';
+    updateLines();
+  }
+
+  // 입력이 끝나면 원래 위치로 돌려놓는다
+  function restoreHome(el) {
+    if (!el._home) return;
+    el.style.left = el._home.l + 'px';
+    el.style.top = el._home.t + 'px';
+    updateLines();
+  }
+
+  // 삭제 원 위에 놓으면 장방형이 축소되며 사라진다
+  function deleteShrinking(el) {
+    el._dead = true;
+    retractLinksOf(el);
+    markDirty();
+    el.style.pointerEvents = 'none';
+    el.style.transition = 'transform 0.2s ease-in, opacity 0.2s ease-in';
+    void el.offsetWidth;
+    el.style.transform = 'scale(0)';
+    el.style.opacity = '0';
+    setTimeout(function () {
+      if (resizeObserver) resizeObserver.unobserve(el);
+      el.remove();
+    }, 240);
+  }
+
+  function showBin() { bin.classList.add('show'); }
+  function hideBin() { bin.classList.remove('show'); }
+
+  // 삭제 원이 놓이는 자리(하단 중앙)까지의 거리 (화면 좌표)
+  function binDist(x, y) {
+    var cx = window.innerWidth / 2, cy = window.innerHeight - 32 - 16;
+    var dx = x - cx, dy = y - cy;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function overBin(x, y) {
+    return binDist(x, y) < 40;
+  }
+
+  function setEditable(t, on) {
+    if (!on) { t.contentEditable = 'false'; return; }
+    try { t.contentEditable = 'plaintext-only'; }
+    catch (_) { t.contentEditable = 'true'; }
+    if (t.contentEditable === 'false' || t.contentEditable === 'inherit') t.contentEditable = 'true';
+  }
+
+  function startEditing(el) {
+    var t = el.firstChild;
+    setHome(el);
+    el.classList.add('editing');
+    setEditable(t, true);
+    t.focus();
+    var range = document.createRange();
+    range.selectNodeContents(t);
+    range.collapse(false);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    keepEditingVisible();
+  }
+
+  function stopEditing(el) {
+    el.classList.remove('editing');
+    setEditable(el.firstChild, false);
+    var sel = window.getSelection();
+    if (sel) sel.removeAllRanges();
+    restoreHome(el);
+    window.scrollTo(0, 0);
+  }
+
+  function blurActiveNode() {
+    var a = document.activeElement;
+    if (a && a.closest && a.closest('.node')) a.blur();
+  }
+
+  function nodeAt(x, y) {
+    var t = document.elementFromPoint(x, y);
+    return t && t.closest ? t.closest('.node') : null;
+  }
+
+  // 화면 이동/확대 중이거나 장방형을 조작 중인지 (서로 방해하지 않도록)
+  var pts = new Map();     // 빈 화면에서 시작된 손가락들
+  var nodeActive = false;  // 장방형을 조작 중인 손가락이 있는지
+  var holdEl = null;       // 지금 손가락으로 누르고 있는 장방형
+  var holdCancelLong = null; // 누르고 있는 장방형의 '길게 누르기(연결)'를 취소하는 함수
+  var holdGroup = null;    // 누르고 있는 동안 다른 손가락으로 함께 선택한 장방형들 (Set)
+
+  // 플러스 버튼에서 호출: 화면 좌표(cx, cy)가 중심이 되도록 새 장방형 생성
+  function createNode(cx, cy) {
+    var w = toWorld(cx, cy);
+    createNodeAt(Math.round(w.x - 28), Math.round(w.y - 16), '', false, null);
+    markDirty();
+  }
+
+  // 월드 좌표(left, top)에 장방형 생성 (저장된 마인드맵을 불러올 때는 silent)
+  function createNodeAt(left, top, text, silent, id) {
+    var el = document.createElement('div');
+    el.className = 'node';
+    el._id = id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
+    if (silent) el.style.animation = 'none';
+    var t = document.createElement('div');
+    t.className = 't';
+    t.contentEditable = 'false';
+    t.spellcheck = false;
+    if (text) t.textContent = text;
+    el.appendChild(t);
+    nodesEl.appendChild(el);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+    setHome(el);
+    if (resizeObserver) resizeObserver.observe(el);
+
+    t.addEventListener('input', function () { keepEditingVisible(); updateLines(); markDirty(); });
+    t.addEventListener('blur', function () { stopEditing(el); });
+    t.addEventListener('paste', function (e) {
+      e.preventDefault();
+      var text = (e.clipboardData || window.clipboardData).getData('text');
+      document.execCommand('insertText', false, text);
+    });
+    el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    el.addEventListener('dragstart', function (e) { e.preventDefault(); });
+
+    el.addEventListener('pointerdown', function (e) {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (pts.size > 0) return;
+      if (nodeActive) {
+        // 한 장방형을 누르고 있는 동안 다른 손가락으로 다른 장방형을 누르면 그룹 선택 (다시 누르면 해제)
+        if (holdEl && holdGroup && el !== holdEl && !el.classList.contains('editing')) {
+          e.preventDefault();
+          if (holdGroup.has(el)) {
+            holdGroup.delete(el);
+            el.classList.remove('grouped');
+          } else {
+            holdGroup.add(el);
+            el.classList.add('grouped');
+          }
+          // 그룹을 고르는 중에는 연결 모드로 넘어가지 않고, 누르고 있는 장방형을 끌어 삭제할 수 있게 한다
+          if (holdCancelLong) holdCancelLong();
+          if (navigator.vibrate) { try { navigator.vibrate(10); } catch (_) {} }
+        }
+        return;
+      }
+      nodeActive = true;
+      var editing = el.classList.contains('editing');
+      holdEl = editing ? null : el;
+      holdGroup = editing ? null : new Set();
+      holdCancelLong = function () { clearTimeout(timer); connecting = false; };
+      var startX = e.clientX, startY = e.clientY;
+      var pointerId = e.pointerId;
+      var connecting = false;
+      var moved = false;
+      var dragging = false;
+      var origLeft = el.offsetLeft, origTop = el.offsetTop;
+      var timer = null;
+
+      if (!editing) {
+        // 편집 중이 아닐 때만 기본 동작(포커스 이동 등)을 막는다
+        e.preventDefault();
+      }
+
+      function startConnect() {
+        connecting = true;
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
+      }
+
+      function onMove(ev) {
+        if (ev.pointerId !== pointerId) return;
+        if (connecting) return;
+        var dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!moved && (Math.abs(dx) > MOVE_TOLERANCE || Math.abs(dy) > MOVE_TOLERANCE)) {
+          moved = true;
+          clearTimeout(timer);
+          if (!editing) {
+            dragging = true;
+            el.classList.add('dragging');
+          }
+        }
+        if (dragging) {
+          el.style.left = Math.round(origLeft + dx / cam.k) + 'px';
+          el.style.top = Math.round(origTop + dy / cam.k) + 'px';
+          updateLines();
+          // 삭제 원 근처로 끌고 왔을 때만 보인다
+          if (binDist(ev.clientX, ev.clientY) < 110) showBin(); else hideBin();
+        }
+      }
+
+      function cleanup() {
+        if (dragging) { setHome(el); hideBin(); markDirty(); }
+        clearTimeout(timer);
+        nodeActive = false;
+        if (holdGroup) holdGroup.forEach(function (n) { n.classList.remove('grouped'); });
+        holdEl = null;
+        holdGroup = null;
+        holdCancelLong = null;
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onCancel);
+        el.classList.remove('dragging');
+      }
+
+      function onUp(ev) {
+        if (ev.pointerId !== pointerId) return;
+        if (connecting) {
+          var target = nodeAt(ev.clientX, ev.clientY);
+          cleanup();
+          if (target && target !== el) toggleLink(el, target);
+          return;
+        }
+        var drop = dragging && overBin(ev.clientX, ev.clientY);
+        var grouped = holdGroup ? Array.from(holdGroup) : [];
+        cleanup();
+        if (drop) {
+          // 누르고 있던 장방형을 삭제하면, 함께 선택한 장방형도 같이 삭제
+          deleteShrinking(el);
+          grouped.forEach(function (n) { if (!n._dead && n.parentNode) deleteShrinking(n); });
+          return;
+        }
+        if (moved) return;
+        if (grouped.length) return; // 그룹을 고르느라 누르고 있었던 경우엔 입력을 시작하지 않는다
+
+        // 탭하면 입력 시작
+        if (!el.classList.contains('editing')) startEditing(el);
+      }
+
+      function onCancel(ev) {
+        if (ev.pointerId !== pointerId) return;
+        cleanup();
+      }
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onCancel);
+
+      if (!editing) {
+        timer = setTimeout(function () {
+          if (!moved) startConnect();
+        }, LONG_PRESS_MS);
+      }
+    });
+
+    return el;
+  }
+
+  // ───────── 마인드맵 저장 / 불러오기 ─────────
+  var STORE_KEY = 'mindmaps-v1';
+  var maps = [];
+  var curId = null;
+  var counter = 0;
+  var loading = true;
+  var dirtyTimer = null;
+
+  function uid() {
+    return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  function curMap() {
+    for (var i = 0; i < maps.length; i++) if (maps[i].id === curId) return maps[i];
+    return null;
+  }
+
+  function newMapObj() {
+    counter++;
+    return { id: uid(), title: '마인드맵 ' + counter, nodes: [], links: [], cam: { x: 0, y: 0, k: 1 } };
+  }
+
+  // 지금 화면의 내용을 현재 마인드맵에 기록
+  function syncCurrent() {
+    var m = curMap();
+    if (!m) return;
+    var ns = [];
+    Array.prototype.forEach.call(nodesEl.children, function (el) {
+      if (el._dead) return;
+      var home = el._home || { l: el.offsetLeft, t: el.offsetTop };
+      ns.push({ id: el._id, x: home.l, y: home.t, text: el.firstChild.innerText.replace(/\n$/, '') });
+    });
+    var ls = [];
+    links.forEach(function (l) {
+      if (!l.removing && !l.a._dead && !l.b._dead) ls.push([l.a._id, l.b._id]);
+    });
+    m.nodes = ns;
+    m.links = ls;
+    m.cam = { x: cam.x, y: cam.y, k: cam.k };
+  }
+
+  function persist() {
+    clearTimeout(dirtyTimer);
+    dirtyTimer = null;
+    syncCurrent();
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        v: 1, maps: maps, curId: curId, counter: counter,
+        rect: document.body.classList.contains('rect'),
+        theme: THEMES[themeIdx]
+      }));
+    } catch (_) { /* 저장소를 쓸 수 없는 환경이면 이번 방문 동안만 유지 */ }
+  }
+
+  function savePrefs() { persist(); }
+
+  function markDirty() {
+    if (loading) return;
+    clearTimeout(dirtyTimer);
+    dirtyTimer = setTimeout(persist, 300);
+  }
+
+  function readStore() {
+    try {
+      var raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return null;
+      var d = JSON.parse(raw);
+      if (!d || !Array.isArray(d.maps) || !d.maps.length) return null;
+      return d;
+    } catch (_) { return null; }
+  }
+
+  function clearBoard() {
+    links.slice().forEach(function (l) {
+      l.token = (l.token || 0) + 1;
+      dropLink(l);
+    });
+    links = [];
+    while (nodesEl.firstChild) {
+      var n = nodesEl.firstChild;
+      if (resizeObserver) resizeObserver.unobserve(n);
+      n.remove();
+    }
+  }
+
+  function loadMap(m) {
+    loading = true;
+    blurActiveNode();
+    hideBin();
+    clearBoard();
+    var byId = {};
+    (m.nodes || []).forEach(function (n) {
+      byId[n.id] = createNodeAt(n.x, n.y, n.text || '', true, n.id);
+    });
+    (m.links || []).forEach(function (pair) {
+      if (byId[pair[0]] && byId[pair[1]]) makeLink(byId[pair[0]], byId[pair[1]], false);
+    });
+    var c = m.cam || { x: 0, y: 0, k: 1 };
+    cam.x = c.x; cam.y = c.y; cam.k = c.k;
+    applyCam();
+    loading = false;
+  }
+
+  function switchMap(id) {
+    if (id === curId) return;
+    persist();
+    curId = id;
+    loadMap(curMap());
+    // 목록을 다시 그리지 않고 선택 표시만 옮겨서, 제목이 커지고 작아지는 애니메이션이 보이게 한다
+    Array.prototype.forEach.call(listEl.children, function (r) {
+      r.classList.toggle('cur', r.dataset.id === curId);
+    });
+    persist();
+  }
+
+  // 마인드맵 삭제 (선택된 것을 지우면 이웃 마인드맵으로 이동, 마지막 하나였다면 빈 마인드맵으로 대체)
+  function deleteMap(id) {
+    if (maps.length <= 1) return; // 마지막 하나는 삭제할 수 없다
+    var idx = -1;
+    for (var i = 0; i < maps.length; i++) if (maps[i].id === id) idx = i;
+    if (idx < 0) return;
+    var wasCur = id === curId;
+    var row = listEl.querySelector('[data-id="' + id + '"]');
+    maps.splice(idx, 1);
+    var replaced = false;
+    if (!maps.length) { maps.push(newMapObj()); replaced = true; }
+    if (wasCur) {
+      var next = maps[Math.min(idx, maps.length - 1)];
+      curId = next.id;
+      loadMap(next);
+    }
+    if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
+    if (replaced || !row) {
+      renderList();
+    } else {
+      Array.prototype.forEach.call(listEl.children, function (r) {
+        if (r !== row) r.classList.toggle('cur', r.dataset.id === curId);
+      });
+      row.style.pointerEvents = 'none';
+      row.style.height = row.offsetHeight + 'px';
+      void row.offsetHeight;
+      row.style.transition = 'height 0.2s ease, opacity 0.2s ease, padding 0.2s ease, transform 0.2s ease';
+      row.style.transform = 'translateX(80px)';
+      row.style.height = '0px';
+      row.style.paddingTop = '0px';
+      row.style.paddingBottom = '0px';
+      row.style.opacity = '0';
+      setTimeout(function () { if (row.parentNode) row.parentNode.removeChild(row); }, 220);
+    }
+    persist();
+  }
+
+  function createMap() {
+    persist();
+    var m = newMapObj();
+    maps.push(m);
+    curId = m.id;
+    loadMap(m);
+    renderList();
+    persist();
+  }
+
+  // ───────── 하단 좌측 메뉴 (가로줄 세개) ─────────
+  var dock = document.getElementById('dock');
+  var menuBtn = document.getElementById('menuBtn');
+  var listEl = document.getElementById('maplist');
+
+  var listMoved = false;   // 목록을 끌어 스크롤했는지
+  var reordered = false;   // 방금 순서를 바꿨는지 (뒤따르는 클릭 무시)
+  var titleBefore = '';
+  var listDrag = null;
+
+  function setCaretEnd(el) {
+    var range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // 선택된 마인드맵의 제목(크고 굵은 글씨)을 눌러서 이름 변경
+  function startTitleEdit(row) {
+    titleBefore = row.textContent;
+    row.classList.add('editing');
+    setEditable(row, true);
+    row.focus();
+    setCaretEnd(row);
+  }
+
+  function attachTitleEditing(row, m) {
+    row.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); row.blur(); }
+    });
+    row.addEventListener('paste', function (e) {
+      e.preventDefault();
+      var text = (e.clipboardData || window.clipboardData).getData('text').replace(/\s+/g, ' ');
+      document.execCommand('insertText', false, text);
+    });
+    row.addEventListener('input', function () {
+      if (row.textContent.length > 40) {
+        row.textContent = row.textContent.slice(0, 40);
+        setCaretEnd(row);
+      }
+    });
+    row.addEventListener('blur', function () {
+      row.classList.remove('editing');
+      setEditable(row, false);
+      var sel = window.getSelection();
+      if (sel) sel.removeAllRanges();
+      var name = row.textContent.replace(/\s+/g, ' ').trim();
+      if (!name) name = titleBefore || m.title;
+      row.textContent = name;
+      if (m.title !== name) {
+        m.title = name;
+        markDirty();
+      }
+      window.scrollTo(0, 0);
+    });
+  }
+
+  // 목록: 모든 마인드맵을 저장된 순서대로 보여주고, 선택된 것만 크고 굵게 표시
+  function renderList() {
+    listEl.textContent = '';
+    maps.forEach(function (m) {
+      var row = document.createElement('div');
+      row.className = 'mrow' + (m.id === curId ? ' cur' : '');
+      row.textContent = m.title;
+      row.spellcheck = false;
+      row.dataset.id = m.id;
+      attachTitleEditing(row, m);
+      row.addEventListener('click', function () {
+        if (listMoved || reordered) return;
+        if (m.id === curId) {
+          if (!row.classList.contains('editing')) startTitleEdit(row);
+        } else {
+          switchMap(m.id);
+        }
+      });
+      listEl.appendChild(row);
+    });
+    listEl.scrollTop = 0;
+  }
+
+  function blurActiveRow() {
+    var a = document.activeElement;
+    if (a && a.classList && a.classList.contains('mrow')) a.blur();
+  }
+
+  // 메뉴 버튼을 눌러도 입력 중인 장방형의 포커스(키보드)를 빼앗지 않는다
+  dock.addEventListener('pointerdown', function (e) { e.preventDefault(); });
+
+  // 하단 좌측 모서리: 짧게 누르면 메뉴 열기/닫기, 길게 누르면 새 마인드맵
+  var menuLongPressed = false;
+  var menuTimer = null;
+  menuBtn.addEventListener('pointerdown', function () {
+    menuLongPressed = false;
+    clearTimeout(menuTimer);
+    menuTimer = setTimeout(function () {
+      menuLongPressed = true;
+      if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) {} }
+      createMap();
+      dock.classList.add('open');
+    }, 500);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (name) {
+    menuBtn.addEventListener(name, function () { clearTimeout(menuTimer); });
+  });
+  menuBtn.addEventListener('click', function () {
+    if (menuLongPressed) { menuLongPressed = false; return; }
+    var open = dock.classList.toggle('open');
+    if (open) renderList();
+    else blurActiveRow();
+  });
+
+  // 목록 제스처: 끌면 스크롤, 제목을 길게 누른 뒤 끌면 순서 변경
+  listEl.addEventListener('pointerdown', function (e) {
+    var row = e.target.closest('.mrow');
+    if (!row || row.classList.contains('editing')) return;
+    listMoved = false;
+    reordered = false;
+    var rows = Array.prototype.slice.call(listEl.children);
+    var idx = rows.indexOf(row);
+    listDrag = {
+      id: e.pointerId, row: row, rows: rows, idx: idx, newIdx: idx,
+      startY: e.clientY, startX: e.clientX, top: listEl.scrollTop, mode: 'pending', rects: null, timer: null
+    };
+    listDrag.timer = setTimeout(function () {
+      if (listDrag && listDrag.mode === 'pending') startReorder();
+    }, 450);
+  });
+
+  function startReorder() {
+    var d = listDrag;
+    d.mode = 'reorder';
+    d.rects = d.rows.map(function (r) { return { top: r.offsetTop, h: r.offsetHeight }; });
+    d.rows.forEach(function (r) { if (r !== d.row) r.classList.add('shift'); });
+    d.row.classList.add('lift');
+    if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
+  }
+
+  window.addEventListener('pointermove', function (e) {
+    var d = listDrag;
+    if (!d || e.pointerId !== d.id) return;
+    var dy = e.clientY - d.startY;
+    if (d.mode === 'pending') {
+      var dx0 = e.clientX - d.startX;
+      // 가로로 먼저 움직이면 스와이프: 오른쪽이면 삭제 동작, 왼쪽은 무시
+      if (Math.abs(dx0) > 14 && Math.abs(dx0) > Math.abs(dy)) {
+        clearTimeout(d.timer);
+        listMoved = true;
+        if (dx0 > 0 && maps.length > 1) {
+          d.mode = 'swipe';
+          d.row.style.transition = 'none';
+        } else {
+          d.mode = 'none';
+        }
+      }
+    }
+    if (d.mode === 'pending') {
+      // 손가락은 가만히 눌러도 조금씩 흔들리므로, 넉넉한 범위 안에서는 길게 누르기를 계속 기다린다
+      var scrollable = listEl.scrollHeight > listEl.clientHeight + 1;
+      if (scrollable && Math.abs(dy) > 14) {
+        clearTimeout(d.timer);
+        d.mode = 'scroll';
+        listMoved = true;
+      } else if (!scrollable && (Math.abs(dy) > 36 || Math.abs(e.clientX - d.startX) > 36)) {
+        clearTimeout(d.timer);
+        d.mode = 'none';
+        listMoved = true;
+      }
+    }
+    if (d.mode === 'swipe') {
+      var sx = Math.max(0, e.clientX - d.startX);
+      d.row.style.transform = 'translateX(' + sx + 'px)';
+      d.row.style.opacity = String(Math.max(0.15, 1 - sx / 200));
+    } else if (d.mode === 'scroll') {
+      listEl.scrollTop = d.top - dy;
+    } else if (d.mode === 'reorder') {
+      var last = d.rects.length - 1;
+      var rc = d.rects[d.idx];
+      var minDy = d.rects[0].top - rc.top;
+      var maxDy = d.rects[last].top + d.rects[last].h - rc.top - rc.h;
+      dy = Math.max(minDy, Math.min(maxDy, dy));
+      d.row.style.transform = 'translateY(' + dy + 'px)';
+      var center = rc.top + dy + rc.h / 2;
+      var above = 0;
+      d.rects.forEach(function (r, j) {
+        if (j !== d.idx && r.top + r.h / 2 < center) above++;
+      });
+      // 맨 끝까지 끌었으면 높이가 달라도 확실히 맨 끝 자리로
+      if (dy >= maxDy) above = last;
+      else if (dy <= minDy) above = 0;
+      d.newIdx = above;
+      d.rows.forEach(function (r, j) {
+        if (j === d.idx) return;
+        var shift = 0;
+        if (j < d.idx && j >= above) shift = rc.h;
+        else if (j > d.idx && j <= above) shift = -rc.h;
+        r.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
+      });
+    }
+  });
+
+  function endListDrag(e) {
+    var d = listDrag;
+    if (!d || e.pointerId !== d.id) return;
+    clearTimeout(d.timer);
+    listDrag = null;
+    if (d.mode === 'swipe') {
+      var moved = e.clientX - d.startX;
+      var row = d.row;
+      if (moved > 80) {
+        row.style.transition = '';
+        deleteMap(row.dataset.id);
+      } else {
+        // 충분히 밀지 않았으면 제자리로 돌아간다
+        row.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
+        row.style.transform = '';
+        row.style.opacity = '';
+        setTimeout(function () { row.style.transition = ''; }, 220);
+      }
+      return;
+    }
+    if (d.mode === 'reorder') {
+      reordered = true;
+      if (d.newIdx !== d.idx) {
+        var moved = maps.splice(d.idx, 1)[0];
+        maps.splice(d.newIdx, 0, moved);
+        persist();
+      }
+      renderList();
+    }
+  }
+  window.addEventListener('pointerup', endListDrag);
+  window.addEventListener('pointercancel', endListDrag);
+
+  // 원/사각 버튼: 길게 누르면 원 ↔ 사각형, 짧게 누를 때마다 기본 → 다크모드 → 검은 테두리(속 흰색) → 기본 …
+  var THEMES = ['normal', 'dark', 'outline'];
+  var themeIdx = 0;
+
+  function applyTheme(i) {
+    themeIdx = ((i % THEMES.length) + THEMES.length) % THEMES.length;
+    document.body.classList.toggle('dark', THEMES[themeIdx] === 'dark');
+    document.body.classList.toggle('outline', THEMES[themeIdx] === 'outline');
+  }
+
+  var shapeBtn = document.getElementById('shapeBtn');
+  var shapeTimer = null;
+  var shapeLong = false;
+  shapeBtn.addEventListener('pointerdown', function () {
+    shapeLong = false;
+    clearTimeout(shapeTimer);
+    shapeTimer = setTimeout(function () {
+      shapeLong = true;
+      if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) {} }
+      document.body.classList.toggle('rect');
+      savePrefs();
+    }, 500);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (name) {
+    shapeBtn.addEventListener(name, function () { clearTimeout(shapeTimer); });
+  });
+  shapeBtn.addEventListener('click', function () {
+    if (shapeLong) { shapeLong = false; return; }
+    applyTheme(themeIdx + 1);
+    savePrefs();
+  });
+
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  // ───────── 빈 화면 제스처: 길게 누르기(장방형 생성), 드래그(이동), 두 손가락(확대/축소) ─────────
+  var pan = null;    // { sx, sy, cx, cy, moved, timer }
+  var pinch = null;  // { d0, mx, my, cam0 }
+
+  function startPan(x, y, withLongPress) {
+    pan = { sx: x, sy: y, cx: cam.x, cy: cam.y, moved: !withLongPress, timer: null };
+    if (withLongPress) {
+      // 빈 화면을 길게 누르면 그 자리에 바로 장방형이 생긴다
+      pan.timer = setTimeout(function () {
+        if (!pan) return;
+        pan.timer = null;
+        pan.fired = true;
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
+        createNode(x, y);
+      }, LONG_PRESS_MS);
+    }
+  }
+
+  function pointsArray() {
+    return Array.from(pts.values());
+  }
+
+  document.body.addEventListener('pointerdown', function (e) {
+    if (e.target.closest('#dock, #maplist')) return;
+    if (e.target.closest('.node')) return;
+    if (nodeActive) return;
+    if (e.button !== undefined && e.button !== 0) return;
+    if (pts.size >= 2) return;
+    blurActiveNode();
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1) {
+      startPan(e.clientX, e.clientY, true);
+    } else {
+      // 두 번째 손가락: 확대/축소 시작
+      if (pan && pan.timer) clearTimeout(pan.timer);
+      pan = null;
+      var a = pointsArray();
+      pinch = {
+        d0: Math.max(1, Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y)),
+        mx: (a[0].x + a[1].x) / 2,
+        my: (a[0].y + a[1].y) / 2,
+        cam0: { x: cam.x, y: cam.y, k: cam.k }
+      };
+    }
+  });
+
+  window.addEventListener('pointermove', function (e) {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pts.size === 2) {
+      var a = pointsArray();
+      var d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+      var mx = (a[0].x + a[1].x) / 2, my = (a[0].y + a[1].y) / 2;
+      var k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinch.cam0.k * d / pinch.d0));
+      // 처음 두 손가락 가운데 아래에 있던 월드 좌표가 지금 가운데에 오도록
+      var wx = (pinch.mx - pinch.cam0.x) / pinch.cam0.k;
+      var wy = (pinch.my - pinch.cam0.y) / pinch.cam0.k;
+      cam.k = k;
+      cam.x = mx - wx * k;
+      cam.y = my - wy * k;
+      applyCam();
+    } else if (pan && pts.size === 1 && !pan.fired) {
+      var dx = e.clientX - pan.sx, dy = e.clientY - pan.sy;
+      if (!pan.moved && (Math.abs(dx) > MOVE_TOLERANCE || Math.abs(dy) > MOVE_TOLERANCE)) {
+        pan.moved = true;
+        if (pan.timer) { clearTimeout(pan.timer); pan.timer = null; }
+          }
+      if (pan.moved) {
+        cam.x = pan.cx + dx;
+        cam.y = pan.cy + dy;
+        applyCam();
+      }
+    }
+  });
+
+  function endPointer(e) {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId);
+    if (pinch && pts.size < 2) {
+      pinch = null;
+      if (pts.size === 1) {
+        var r = pts.values().next().value;
+        startPan(r.x, r.y, false);
+      }
+    }
+    if (pts.size === 0) {
+      if (pan && pan.timer) clearTimeout(pan.timer);
+      pan = null;
+    }
+  }
+  window.addEventListener('pointerup', endPointer);
+  window.addEventListener('pointercancel', endPointer);
+
+  // 마우스 휠 / 트랙패드 핀치로도 확대·축소
+  window.addEventListener('wheel', function (e) {
+    if (e.target.closest && e.target.closest('#maplist')) return;
+    e.preventDefault();
+    var f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015));
+    zoomAt(e.clientX, e.clientY, cam.k * f);
+  }, { passive: false });
+
+  // iOS 사파리의 기본 핀치 확대 방지
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (name) {
+    document.addEventListener(name, function (e) { e.preventDefault(); });
+  });
+
+  // 메뉴는 키보드가 올라와도 밀리지 않도록, 키보드로 줄어들지 않는 화면 높이 기준으로 고정
+  var stableW = window.innerWidth, stableH = window.innerHeight;
+  function placeDock() {
+    var top = Math.round(stableH - 64) + 'px';
+    dock.style.top = top;
+    document.getElementById('tools').style.top = top;
+  }
+
+  window.addEventListener('resize', function () {
+    if (window.innerWidth !== stableW) {
+      // 화면 회전 등 가로 폭이 바뀐 경우에만 기준을 새로 잡는다
+      stableW = window.innerWidth;
+      stableH = window.innerHeight;
+    } else {
+      stableH = Math.max(stableH, window.innerHeight);
+    }
+    placeDock();
+    keepEditingVisible();
+    updateLines();
+  });
+  placeDock();
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', function () { keepEditingVisible(); placeDock(); });
+    window.visualViewport.addEventListener('scroll', function () { keepEditingVisible(); placeDock(); });
+  }
+
+  window.addEventListener('pagehide', persist);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) persist(); });
+
+  // 시작: 저장된 마인드맵이 있으면 마지막으로 보던 것을, 없으면 새로 만든다
+  (function init() {
+    var saved = readStore();
+    if (saved) {
+      maps = saved.maps;
+      counter = saved.counter || maps.length;
+      document.body.classList.toggle('rect', !!saved.rect);
+      applyTheme(saved.theme ? THEMES.indexOf(saved.theme) : (saved.dark ? 1 : 0));
+      curId = saved.curId;
+      if (!curMap()) curId = maps[0].id;
+    } else {
+      var m = newMapObj();
+      maps = [m];
+      curId = m.id;
+    }
+    loadMap(curMap());
+    renderList();
+  })();
+})();
+</script>
+</body>
+</html>
